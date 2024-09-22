@@ -24,6 +24,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import samples.clickstream.avro.ClickEvent;
 
+import java.io.IOException;
 import java.time.Duration;
 import java.util.*;
 
@@ -32,7 +33,8 @@ public class ClickstreamProcessor {
     private static final Logger LOG = LoggerFactory.getLogger(ClickstreamProcessor.class);
     private static final List<String> MANDATORY_PARAMETERS = Arrays.asList("BootstrapServers", "SchemaRegistryUrl");
     private static transient Gson gson = new GsonBuilder().setDateFormat("yyyy-MM-dd HH:mm:ss.SSS").create();
-
+    // Name of the local JSON resource with the application properties in the same format as they are received from the Amazon Managed Service for Apache Flink runtime
+    private static final String LOCAL_APPLICATION_PROPERTIES_RESOURCE = "KDAApplicationProperties.json";
 
     public static <T> String toJson(T objToConvert){
 
@@ -51,26 +53,24 @@ public class ClickstreamProcessor {
         return null;
     }
 
+    private static Map<String, Properties> loadApplicationProperties(StreamExecutionEnvironment env) throws IOException {
+        if (env instanceof LocalStreamEnvironment) {
+            LOG.info("Loading application properties from '{}'", LOCAL_APPLICATION_PROPERTIES_RESOURCE);
+            return KinesisAnalyticsRuntime.getApplicationProperties(
+                    ClickstreamProcessor.class.getClassLoader()
+                            .getResource(LOCAL_APPLICATION_PROPERTIES_RESOURCE).getPath());
+        } else {
+            LOG.info("Loading application properties from Amazon Managed Service for Apache Flink");
+            return KinesisAnalyticsRuntime.getApplicationProperties();
+        }
+    }
+
     public static void main(String[] args) throws Exception {
 
         //Setting up the ExecutionEnvironment
-        final StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
-        //Setting TimeCharacteristic
-        env.setStreamTimeCharacteristic(TimeCharacteristic.EventTime);
+        StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
 
-        Map<String, Properties> applicationProperties;
-
-        if (env instanceof LocalStreamEnvironment) {
-            applicationProperties  = KinesisAnalyticsRuntime.getApplicationProperties(Objects.requireNonNull(ClickstreamProcessor.class.getClassLoader().getResource("KDAApplicationProperties.json")).getPath());
-            //Setting parallelism in code. When running on my laptop I was getting out of file handles error, so reduced parallelism, but increase it on KDA
-            env.setParallelism(1);
-            //Setting the Checkpoint interval. The Default for KDA App is 60,000 (or 1 min).
-            // Here I'm setting it to 5 secs in the code which will override the KDA app setting
-            env.enableCheckpointing(20000L);
-
-        } else {
-            applicationProperties  = KinesisAnalyticsRuntime.getApplicationProperties();
-        }
+        Map<String, Properties> applicationProperties = loadApplicationProperties(env);
 
         if (applicationProperties == null) {
             LOG.error("Unable to load application properties from the Kinesis Analytics Runtime. Exiting.");
